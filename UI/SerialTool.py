@@ -1,17 +1,43 @@
 # -*- coding: utf-8 -*-
+#-------------------------------------------------------------------------------
+# Name:        SerialTool
+# Purpose:
+#
+# Author:      Bruce Zhu
+#
+# Created:     10/2016
+# Copyright:   (c) it 2017
+# Licence:     <your licence>
+#-------------------------------------------------------------------------------
+
 
 import tkinter as tk
 import tkinter.ttk as ttk
+from tkinter import messagebox
+
 import logging
 import threading
+import configparser
+import _thread
+import subprocess
 
 from .Settings import Settings
 from .PyTkinter import *
-
+from .COM import FtpBT
+from .COM import checkUpdates
+#from .COM import logger
 from tkinter.filedialog import *
 from time import *
 from .COM import SerialHelper
 from serial.tools import list_ports
+
+if not os.path.exists('./log'):
+    os.mkdir('./log')
+currentTime = strftime("%Y%m%d%H%M")
+logging.basicConfig(filename='./log/{0}.log'.format(currentTime),
+            format='%(asctime)s -%(name)s-%(levelname)s-%(module)s:%(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S %p',
+            level=logging.DEBUG)
 
 monaco_font = ('Monaco', 12)
 font = monaco_font
@@ -24,15 +50,20 @@ size_dict = {
                 "clear_label_width": 22
             }
 
+conf = configparser.ConfigParser()
+try:
+    conf.read('./UI/version.ini')
+    appVerson = conf.get("version", "app")
+except Exception as e:
+    logging.log(logging.DEBUG, 'Error: {0}'.format(e))
+    sys.exit()
+
 class SerialToolUI(object):
     def __init__(self):
 
         self.root = tk.Tk()
         self.create_frame()
-        self.app_version = "SQA Power Cycle Tool v1.1"
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
-                            datefmt='%a, %d %b %Y %H:%M:%S')
+        self.app_version = "SQA Power Cycle Tool v{0}".format(appVerson)
         self.portselect = None
         self.ser = None
         self.receive_count = 0
@@ -42,7 +73,6 @@ class SerialToolUI(object):
         self.runflag = False
         self.portDisconnect = False
 
-        self.port_addr = ['','01','02','04','08','10','20','40','80']
         self.__settings = Settings('settings.joson')
         self.__firstLogIdx = 0
         self.__lastLogIdx = 0
@@ -53,8 +83,21 @@ class SerialToolUI(object):
         self.__autoSaveTimer = None
 
         self.create_frame()
-        self.power_cycle_thread() #thread2
+        self.powerCycleID = 0
+        #self.power_cycle_thread() #thread2
 
+        self.host = None
+        self.port = None
+        self.user = None
+        self.passwd = None
+        self.btName = None
+        self.dataPath = None
+        self.checkBT = None
+        self.time_press_button_power_on = None
+        self.time_press_button_power_off = None
+        self.ini_filename = '.\\Power_cycle.ini'
+
+        self.menu_bar = None
 
     def mainLoop(self):
         self.__setupRoot()
@@ -70,20 +113,116 @@ class SerialToolUI(object):
                                               background="#292929", foreground="#FFFFFF")
         self.root.resizable(False, False)
         self.root.title(self.app_version)
-        self.root.iconbitmap("%s\\Power_48px.ico"%os.getcwd())
+        self.root.iconbitmap("%s\\UI\\icon\\Power_48px.ico"%os.getcwd())
 
     def create_frame(self):
         '''
         Create new window, divide it into two parts, bottom part is state column
         '''
+        self.menu_bar = Frame(self.root, relief=RAISED, borderwidth=2)
         self.frm = PyLabelFrame(self.root)
         self.frm_status = PyLabelFrame(self.root)
 
-        self.frm.grid(row=0, column=0, sticky="wesn")
-        self.frm_status.grid(row=1, column=0, sticky="wesn")
+        self.menu_bar.grid(row=0, column=0, padx=0, pady=0, sticky="we")
+        self.frm.grid(row=1, column=0, sticky="wesn")
+        self.frm_status.grid(row=2, column=0, sticky="wesn")
 
+        help_menu = self.create_help_menu()
+        #about_menu = self.create_about_menu()
+        tools_menu = self.create_tools_menu()
+        self.menu_bar.tk_menuBar(help_menu, tools_menu)
         self.create_frm()
         self.create_frm_status()
+
+    def create_help_menu(self):
+        HELP_MENU_ITEMS = ['Undo', 'How to use', 'About']
+        help_item = Menubutton(self.menu_bar, text='Help', underline=1)
+        help_item.pack(side=LEFT, padx='1m')
+        help_item.menu = Menu(help_item)
+
+        help_item.menu.add('command', label=HELP_MENU_ITEMS[0])
+        help_item.menu.entryconfig(1, state=DISABLED)
+
+        help_item.menu.add_command(label=HELP_MENU_ITEMS[1])
+        help_item.menu.add_command(label=HELP_MENU_ITEMS[2], command=self.about)
+        help_item['menu'] = help_item.menu
+        return help_item
+
+    def create_tools_menu(self):
+        TOOLS_MENU_ITEMS = ['Check for Updates']
+        tools_item = Menubutton(self.menu_bar, text='Tools', underline=1)
+        tools_item.pack(side=LEFT, padx='1m')
+        tools_item.menu = Menu(tools_item)
+        tools_item.menu.add_command(label=TOOLS_MENU_ITEMS[0], command=self.checkForUpdates)
+        tools_item['menu'] = tools_item.menu
+        return tools_item
+
+    def about(self):
+        messagebox.showinfo('About', 'Versoin: {0}\nAuthor: Bruce Zhu\nEmail: bruce.zhu@tymphany.com'.format(appVerson))
+
+    def checkForUpdates(self):
+        conf = configparser.ConfigParser()
+        try:
+            conf.read('.\\UI\\version.ini')
+            currentVer = conf.get("version", "app")
+        except Exception as e:
+            logging.log(logging.DEBUG, 'Error: {0}'.format(e))
+            return
+        if not os.path.exists('.\\download'):
+            os.makedirs('.\\download')
+        dest_dir = '.\\download\\downVer.ini'
+        checkupdates = checkUpdates()
+        if not checkupdates.downLoadFromURL('http://sw.tymphany.com/fwupdate/sqa/tool/PowerCycle/version.ini', dest_dir):
+            messagebox.showinfo('Tips', 'Cannot communicate with new version server!\nPlease check your network!')
+            return
+        downVer = checkupdates.getVer(dest_dir)
+        logging.log(logging.DEBUG, 'Starting compare version')
+        if checkupdates.compareVer(downVer, currentVer):
+            ask = messagebox.askokcancel('Tips', 'New version %s is detected !\n Do you want to update now?'%downVer)
+            if ask:
+                self.downloadThread(downVer)
+                logging.log(logging.DEBUG, 'Starting download')
+        else:
+            messagebox.showinfo('Tips', 'No new version!')
+
+    def downloadThread(self, downVer):
+        try:
+            _thread.start_new_thread(self.downloadZip, (downVer,) )
+        except:
+            logging.log(logging.DEBUG, 'Cannot start power cycle thread!!!')
+
+    def downloadZip(self, downVer):
+        newVerPath = '.\\download\\PowerCycle.zip'
+        installFile = '.\\download\\install.bat'
+        checkupdates = checkUpdates()
+        if not checkupdates.downLoadFromURL('http://sw.tymphany.com/fwupdate/sqa/tool/PowerCycle/PowerCycle_v{0}.zip'.format(downVer), newVerPath):
+            messagebox.showinfo('Tips', 'Cannot communicate with new version server!\nPlease check your network!')
+            return
+        if not checkupdates.downLoadFromURL('http://sw.tymphany.com/fwupdate/sqa/tool/PowerCycle/install.bat', installFile):
+            messagebox.showinfo('Tips', 'Cannot communicate with new version server!\nPlease check your network!')
+            return
+        #download process
+        checkupdates.unzip_dir(newVerPath, '.\\download\\PowerCycle')
+        ask = messagebox.askokcancel('Tips', 'Do you want to install this new version?')
+        if ask:
+            logging.log(logging.DEBUG, "Starting install")
+            self.installThread()
+            logging.log(logging.DEBUG, "Close UI")
+            self.root.destroy()
+            logging.log(logging.DEBUG, "System exit")
+            sys.exit()
+
+    def installThread(self):
+        batPath = r'"%s\\download\\install.bat"'%os.getcwd() #Note: path must be '"D:\Program Files"' to avoid include space in path
+        logging.log(logging.DEBUG, "Run %s"%batPath)
+        try:
+            _thread.start_new_thread(self.execBat, (batPath,) )
+        except Exception as e:
+           logging.log(logging.DEBUG, 'Error when install: {0}'.format(e))
+
+    def execBat(self, path):
+        os.system(path)
+        #subprocess.Popen(Path, shell=True, stdout=subprocess.PIPE)
 
     def create_frm(self):
         '''
@@ -256,7 +395,7 @@ class SerialToolUI(object):
                                                   text="Port Address" + " "*size_dict["reset_label_width"],
                                                   font=font)
 
-        port = ['1', '2', '3', '4', '5', '6', '7', '8']
+        port = ['01', '02', '04', '08', '10', '20', '40', '80']
         self.frm_right_combobox_port = ttk.Combobox(self.frm_right_data_set,
                                                        width=15,
                                                        values=port)
@@ -280,7 +419,7 @@ class SerialToolUI(object):
                                                   text=''+ " "*size_dict["clear_label_width"],
                                                   font=font)
 
-        self.frm_right_savepath_label.grid(row=0, column=0, padx=5, pady=5, sticky="wesn")
+        #self.frm_right_savepath_label.grid(row=0, column=0, padx=5, pady=5, sticky="wesn")
 
     def create_frm_right_clear(self):
         self.receive_hex_cbtn_var = tk.IntVar()
@@ -302,7 +441,7 @@ class SerialToolUI(object):
 
 
         self.frm_right_clear_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.frm_right_saveprint_btn.grid(row=0, column=1, padx=5, pady=5, sticky="wesn")
+        #self.frm_right_saveprint_btn.grid(row=0, column=1, padx=5, pady=5, sticky="wesn")
         self.frm_right_clear_btn.grid(row=0, column=2, padx=5, pady=5, sticky="wesn")
 
     def create_frm_status(self):
@@ -322,6 +461,7 @@ class SerialToolUI(object):
             pass
 
     def addLog(self, log, tag):
+        logging.log(logging.INFO, log)
         if log[-1] != '\n':
             log = log + '\n'
 
@@ -459,7 +599,6 @@ class SerialToolUI(object):
         except Exception as e:
             logging.error(e)
 
-
     def Toggle(self):
         '''
         Open or close port
@@ -514,15 +653,57 @@ class SerialToolUI(object):
         self.__autoSave = False
         self.__updateAutoSave()
 
-
     def Double_click(self,event):
         self.frm_left_open_btn.configure(state='active')
 
     def checkBTstatus(self):
+        self.addLog('Start to check BT[{0}] connect...'.format(self.btName),'')
+        try:
+            btCmd = FtpBT(host=self.host, port=self.port, user='', passwd='', btName=self.btName, dataPath=self.dataPath)
+        except Exception as e:
+            self.addLog('Error when connect FTP: {0}'.format(e),'')
+            return False
+        status = btCmd.cmd('bluetooth status()')
+        if status == '1':
+            self.addLog('BT device [%s] connected'%self.btName,'')
+            return '1'
+        elif status == '0':
+            self.addLog('BT device [%s] disconnected!'%self.btName,'')
+            return '0'
+        elif status == False:
+            self.addLog('FTP seems disconnected!!!','')
+            return False
 
+    def setWidgetState(self, s):
+            self.frm_right_timeon_entry.configure(state = s)
+            self.frm_right_timeoff_entry.configure(state = s)
+            self.frm_right_count_entry.configure(state = s)
+            self.frm_right_clearSettings_btn.configure(state = s)
+            self.frm_right_saveprint_btn.configure(state = s)
+            self.frm_right_combobox_purpose.configure(state = s)
+            self.frm_right_combobox_port.configure(state = s)
+            if s == 'disabled':
+                self.frm_right_run_btn['text'] = 'Stop'
+            elif s == 'normal':
+                self.frm_right_run_btn['text'] = 'Run'
+            else:
+                logging.log(logging.DEBUG, 'Error: no [{0}] state'.format(s))
 
     def Run(self):
         if (not self.timeonStr.get().isdigit()) or (not self.timeoffStr.get().isdigit()) or (not self.countStr.get().isdigit()):
+            self.addLog('Please check your fill in data!!!','')
+            return
+
+        if os.path.isfile(self.ini_filename) == False:
+            self.addLog("Cannot find configure file Power_cycle.ini",'')
+            return
+        #if self.ini_filename == None:
+        #    self.ini_filename = askopenfilename(title = "Choose Power_cycle.ini",filetypes = [("ini files","*.ini")]) #initialdir = 'C:/',
+
+        if "Power_cycle.ini" not in self.ini_filename:
+            self.addLog("Your selected file maybe is wrong! Please choose again!!",'')
+            self.runflag = False
+            #self.ini_filename = None
             return
 
         if 'Open' not in self.frm_status_label['text']:
@@ -533,111 +714,145 @@ class SerialToolUI(object):
             return
 
         if self.frm_right_run_btn['text'] == 'Run':
-            self.runflag=True
-            self.frm_right_timeon_entry.configure(state = 'disabled')
-            self.frm_right_timeoff_entry.configure(state = 'disabled')
-            self.frm_right_count_entry.configure(state = 'disabled')
-            self.frm_right_clearSettings_btn.configure(state = 'disabled')
-            self.frm_right_saveprint_btn.configure(state = 'disabled')
-            self.frm_right_combobox_purpose.configure(state = 'disabled')
-            self.frm_right_combobox_port.configure(state = 'disabled')
+            self.runflag = True
             self.addLog('Running......','')
-            self.frm_right_run_btn['text'] = 'Stop'
+            self.setWidgetState('disabled')
+            self.power_cycle_thread()
         else:
-            self.runflag=False
-            self.frm_right_timeon_entry.configure(state = 'normal')
-            self.frm_right_timeoff_entry.configure(state = 'normal')
-            self.frm_right_count_entry.configure(state = 'normal')
-            self.frm_right_clearSettings_btn.configure(state = 'normal')
-            self.frm_right_combobox_purpose.configure(state = 'normal')
-            self.frm_right_combobox_port.configure(state = 'normal')
+            self.runflag = False
             self.addLog('Stop......','')
-            self.frm_right_run_btn['text'] = 'Run'
+            self.setWidgetState('normal')
 
     def power_cycle_thread(self):
+        """
         self.thread_findserial = threading.Timer(3, self.power_cycle_run) #wait 3s to launch, avoid affect main thread(UI)
         self.thread_findserial.setDaemon(True)
         self.thread_findserial.start()
+        def power_cycle_run(self):
+            while True:
+                self.power_cycle()
+        """
+        self.powerCycleID += 1
+        try:
+            _thread.start_new_thread(self.power_cycle, ("PowerCycle-{0}".format(self.powerCycleID),) )
+        except:
+           self.addLog("Error: Cannot start power cycle thread!!!",'')
 
-    def power_cycle_run(self):
-        while True:
-            self.power_cycle()
+    def power_cycle(self, threadName):
+        if self.runflag == False:
+            return
+        if os.path.isfile(self.ini_filename) == False:
+            self.addLog("Cannot find file Power_cycle.ini",'')
+            return
+        conf = configparser.ConfigParser()
+        try:
+            conf.read(self.ini_filename)
+            self.host = conf.get("Ftp", "ip")
 
-    def power_cycle(self):
-        if self.runflag == True:
-            if self.ser:
-                if self.frm_right_combobox_purpose.get() == 'Button':
-                    sleep(0.5)
-                    self.ser.write('50'.encode('utf-8'), isHex=True)
-                    sleep(0.5)
-                    self.ser.write('51'.encode('utf-8'), isHex=True)
-                    sleep(0.5)
-                    self.ser.write('00'.encode('utf-8'), isHex=True)
+            self.user = conf.get("Ftp", "user")
+            self.passwd = conf.get("Ftp", "passwd")
+            self.dataPath = conf.get("Ftp", "dataPath")
+            self.btName = conf.get("Device", "btName")
 
-                for i in range(self.count_pause+1,int(self.countStr.get())+1):
-                    self.addLog('--------------------------------','')
-                    self.addLog('This is >>>>>>>>>> %i<<<<<<<<<< times'%i,'')
-                    self.addLog('powering on','')
-                    self.addLog('Waiting %s seconds'%self.timeonStr.get(),'')
+            try:
+                self.port = conf.getint("Ftp", "port")
+                self.checkBT = conf.getint("Device", "checkBT")
+                self.time_press_button_power_on = conf.getint("Device", "time_press_button_power_on")
+                self.time_press_button_power_off = conf.getint("Device", "time_press_button_power_off")
+            except Exception as e:
+                self.addLog("Some config value must be integer: {0}".format(e),'')
+                return
 
-                    if self.portDisconnect == False:
-                        try:
-                            if self.frm_right_combobox_purpose.get() == 'Button':
-                                self.ser.write(self.port_addr[int(self.frm_right_combobox_port.get())].encode('utf-8'), isHex=True)
-                                sleep(0.5)
+        except Exception as e:
+            self.addLog("Error when read Power_cycle.ini : {0}".format(e),'')
+            return
+        if self.ser:
+            if self.frm_right_combobox_purpose.get() == 'Button':
+                sleep(0.5)
+                self.ser.write('50'.encode('utf-8'), isHex=True)
+                sleep(0.5)
+                self.ser.write('51'.encode('utf-8'), isHex=True)
+                sleep(0.5)
+                self.ser.write('00'.encode('utf-8'), isHex=True)
+
+            for i in range(self.count_pause+1,int(self.countStr.get())+1):
+                if self.runflag == False:
+                    return
+                self.addLog('-'*37,'')
+                self.addLog('This is >>>>>>>>>> %i<<<<<<<<<< times'%i,'')
+                self.addLog('Powering on...','')
+                self.addLog('Waiting %s seconds'%self.timeonStr.get(),'')
+
+                if self.portDisconnect == False:
+                    try:
+                        if self.frm_right_combobox_purpose.get() == 'Button':
+                            if self.time_press_button_power_on == 0 and self.time_press_button_power_off == 0:
+                                self.ser.write(self.frm_right_combobox_port.get().encode('utf-8'), isHex=True)
+                            else:
+                                self.ser.write(self.frm_right_combobox_port.get().encode('utf-8'), isHex=True)
+                                sleep(self.time_press_button_power_on/1000)
+                                self.ser.write('00'.encode('utf-8'), isHex=True)
+                        else:
+                            self.ser.write('B'.encode('utf-8'))
+                        sleep(int(self.timeonStr.get()))
+                        if self.checkBT == 1:
+                            status = self.checkBTstatus()
+                            if status == '1':
+                                self.addLog('               Power on ------------------------------OK','')
+                            elif status == '0':
+                                self.addLog('               Power on ------------------------------Failed','')
+                            elif status == False:
+                                self.addLog('FTP seems disconnected!!!','')
+                                self.addLog('Please check your FTP connect and run again!','')
+                                return
+                    except Exception as e:
+                        self.addLog('Error when powering on: {0}'.format(e),'')
+                        self.frm_right_run_btn['text'] = 'Run'
+                        return
+                else:
+                    self.addLog('Serial Port seems disconnected......','')
+                    self.frm_right_run_btn['text'] = 'Run'
+                    return
+
+                #----------------------------------------------------------------------------
+                #power off
+                if self.runflag == False:
+                    return
+                self.addLog('Powering off...','')
+                self.addLog('Waiting %s seconds'%self.timeoffStr.get(),'')
+                if self.portDisconnect == False:
+                    try:
+                        if self.frm_right_combobox_purpose.get() == 'Button':
+                            if self.time_press_button_power_on == 0 and self.time_press_button_power_off == 0:
                                 self.ser.write('00'.encode('utf-8'), isHex=True)
                             else:
-                                self.ser.write('B'.encode('utf-8'))
-
-                        except:
-                            self.addLog('Serial Port seems disconnected......','')
-                            self.frm_right_run_btn['text'] = 'Run'
-                            self.runflag = False
-                            return
-                    else:
-                        self.addLog('Serial Port seems disconnected......','')
-                        self.frm_right_run_btn['text'] = 'Run'
-                        self.runflag = False
-                        return
-                    sleep(int(self.timeonStr.get()))
-
-                    self.addLog('powering off','')
-                    self.addLog('Waiting %s seconds'%self.timeoffStr.get(),'')
-                    if self.portDisconnect == False:
-                        try:
-                            if self.frm_right_combobox_purpose.get() == 'Button':
-                                self.ser.write(self.port_addr[int(self.frm_right_combobox_port.get())].encode('utf-8'), isHex=True)
-                                sleep(0.5)
+                                self.ser.write(self.frm_right_combobox_port.get().encode('utf-8'), isHex=True)
+                                sleep(self.time_press_button_power_off/1000)
                                 self.ser.write('00'.encode('utf-8'), isHex=True)
-                            else:
-                                self.ser.write('A'.encode('utf-8'))
-                        except:
-                            self.addLog('Serial Port seems disconnected......','')
-                            self.frm_right_run_btn['text'] = 'Run'
-                            self.runflag = False
-                            return
-                    else:
-                        self.addLog('Serial Port seems disconnected......','')
+                        else:
+                            self.ser.write('A'.encode('utf-8'))
+                        sleep(int(self.timeonStr.get()))
+                        if self.checkBT == 1:
+                            status = self.checkBTstatus()
+                            if status == '1':
+                                self.addLog('               Power off -----------------------------Failed','')
+                            elif status == '0':
+                                self.addLog('               Power off -----------------------------OK','')
+                            elif status == False:
+                                self.addLog('FTP seems disconnected!!!','')
+                                self.addLog('Please check your FTP connect and run again!','')
+                                return
+                    except Exception as e:
+                        self.addLog('Error when powering off: {0}'.format(e),'')
                         self.frm_right_run_btn['text'] = 'Run'
-                        self.runflag = False
                         return
-                    sleep(int(self.timeoffStr.get()))
-                    self.addLog('--------------------------------','')
-                    if self.runflag==False:
-                        self.frm_right_run_btn['text'] = 'Run'
-                        self.count_pause = i
-                        return
-                self.frm_right_run_btn['text'] = 'Run'
-                self.frm_right_timeon_entry.configure(state = 'normal')
-                self.frm_right_timeoff_entry.configure(state = 'normal')
-                self.frm_right_count_entry.configure(state = 'normal')
-                self.frm_right_clearSettings_btn.configure(state = 'normal')
-                self.frm_right_saveprint_btn.configure(state = 'normal')
-                self.frm_right_combobox_purpose.configure(state = 'normal')
-                self.frm_right_combobox_port.configure(state = 'normal')
-
-                self.addLog('Running over......','')
-                self.runflag=False
+                else:
+                    self.addLog('Serial Port seems disconnected......','')
+                    self.frm_right_run_btn['text'] = 'Run'
+                    return
+                self.addLog('-'*37,'')
+            self.setWidgetState('normal')
+            self.addLog('Running over......','')
 
 
 if __name__ == '__main__':

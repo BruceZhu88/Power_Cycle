@@ -1,2 +1,2 @@
-c:/Python34/python main.py
+c:/Python34/python PowerCycle.py
 pause
