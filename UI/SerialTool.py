@@ -9,8 +9,6 @@
 # Copyright:   (c) it 2017
 # Licence:     <your licence>
 #-------------------------------------------------------------------------------
-
-
 import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter import messagebox
@@ -31,13 +29,24 @@ from time import *
 from .COM import SerialHelper
 from serial.tools import list_ports
 
-if not os.path.exists('./log'):
-    os.mkdir('./log')
+maxLogFiles = 150
+logPath = '.\\log'
+if not os.path.exists(logPath):
+    os.mkdir(logPath)
 currentTime = strftime("%Y%m%d%H%M")
-logging.basicConfig(filename='./log/{0}.log'.format(currentTime),
+logfilename = '{0}/{1}.log'.format(logPath, currentTime)
+logging.basicConfig(filename=logfilename,
             format='%(asctime)s -%(name)s-%(levelname)s-%(module)s:%(message)s',
             datefmt='%Y-%m-%d %H:%M:%S %p',
             level=logging.DEBUG)
+
+conf = configparser.ConfigParser()
+try:
+    conf.read('./UI/version.ini')
+    appVerson = conf.get("version", "app")
+except Exception as e:
+    logging.log(logging.DEBUG, 'Error: {0}'.format(e))
+    sys.exit()
 
 monaco_font = ('Monaco', 12)
 font = monaco_font
@@ -49,14 +58,6 @@ size_dict = {
                 "reset_label_width": 24,
                 "clear_label_width": 22
             }
-
-conf = configparser.ConfigParser()
-try:
-    conf.read('./UI/version.ini')
-    appVerson = conf.get("version", "app")
-except Exception as e:
-    logging.log(logging.DEBUG, 'Error: {0}'.format(e))
-    sys.exit()
 
 class SerialToolUI(object):
     def __init__(self):
@@ -97,7 +98,10 @@ class SerialToolUI(object):
         self.time_press_button_power_off = None
         self.ini_filename = '.\\Power_cycle.ini'
 
-        self.menu_bar = None
+        self.thread_clearLog = threading.Timer(4, self.clearLog) #wait 4s to launch, avoid affect main thread(UI)
+        self.thread_clearLog.setDaemon(True)
+        self.thread_clearLog.start()
+        #self.clearLogThread()
 
     def mainLoop(self):
         self.__setupRoot()
@@ -449,8 +453,41 @@ class SerialToolUI(object):
                                              text="Ready",
                                              font=font)
         self.frm_status_label.grid(row=0, column=0, padx=5, pady=5, sticky="wesn")
+    #************************************************************************************************************
+    def walkFolders(self, folder):
+        folderscount=0
+        filescount=0
+        size=0
+        #walk(top,topdown=True,onerror=None)
+        for root,dirs,files in os.walk(folder):
+            folderscount+=len(dirs)
+            filescount+=len(files)
+            size+=sum([os.path.getsize(os.path.join(root,name)) for name in files])
+        return folderscount,filescount,size
 
+    def clearLogThread(self):
+        try:
+            _thread.start_new_thread(self.clearLog, () )
+        except:
+           logging.log(logging.DEBUG, "Cannot start clearLog thread!!!")
 
+    def clearLog(self):
+        if os.path.exists(logPath):
+            folderscount,filescount,size = self.walkFolders(logPath)
+            if filescount > maxLogFiles:
+                ask = messagebox.askokcancel('Tips', 'Your log files have been exceeded {0}!\nDo you want to clear?'.format(maxLogFiles))
+                if ask:
+                    for parent,dirnames,filenames in os.walk(logPath):
+                        for filename in filenames:
+                            if filename not in logfilename:
+                                try:
+                                    delFilePath = os.path.join(parent,filename)
+                                    os.remove(delFilePath)
+                                except Exception as e:
+                                    logging.log(logging.DEBUG, "Delete file {0} failed: {1}".format(delFilePath, e))
+        else:
+            logging.log(logging.DEBUG, "Object directory {0} does not exist!!".format(logPath))
+    #************************************************************************************************************
     def Reset(self):
         self.frm_right_config.delete("0.0", "end")
 

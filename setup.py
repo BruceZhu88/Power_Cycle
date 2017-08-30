@@ -4,7 +4,7 @@ import sys
 import os
 import zipfile
 import configparser
-import sys
+
 from cx_Freeze import setup, Executable
 
 conf = configparser.ConfigParser()

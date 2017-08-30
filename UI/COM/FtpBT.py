@@ -93,7 +93,7 @@ class FtpBT:
                 return line
             file.close()
         except Exception as e:
-            logging.log(logging.DEBUG, "file {0} does not exist: {1}".format(filename, e))
+            logging.log(logging.DEBUG, "File {0} does not exist: {1}".format(filename, e))
             return ""
 
     def writeFile(self, filename, s):
@@ -107,10 +107,10 @@ class FtpBT:
             try:
                 os.remove(src)
             except Exception as e:
-                logging.log(logging.DEBUG, "delete file {0} failed: {1}".format(src, e))
+                logging.log(logging.DEBUG, "Delete file {0} failed: {1}".format(src, e))
                 #print('delete file %s failed'%src)
         else:
-            logging.log(logging.DEBUG, "delete file {0} does not exist!!".format(src))
+            logging.log(logging.DEBUG, "Delete file {0} does not exist!!".format(src))
             #print('delete file %s does not exist!'%src)
 
     def cmd(self, str):
